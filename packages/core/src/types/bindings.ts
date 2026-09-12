@@ -166,6 +166,19 @@ export type TypedBindings<Actions extends ActionMap> = {
  * Reads per platform because overrides are written per platform: keyboard can
  * be an override while gamepad is still a default.
  */
+/**
+ * Where a binding's touch modifier lives, when it has one.
+ *
+ * `UIModifier` names a `GuiButton` that must be actively touched for the binding to fire, the
+ * touch counterpart of `primaryModifier`/`secondaryModifier`. It is what makes a region-gated
+ * dynamic thumbstick expressible: bind `TouchDelta` and gate it on the on-screen region the
+ * gesture must *start* in.
+ *
+ * It is not an input source. A binding carrying only `uiModifier` still names no input the engine
+ * can fire on, so {@link hasInputSource} keeps reporting `false` for it and `createInputBinding`
+ * keeps rejecting it.
+ */
+
 export type BindingOrigin = "default" | "override" | "undeclared";
 
 /**
@@ -219,6 +232,11 @@ interface BaseBindingConfig {
 	 * @see https://create.roblox.com/docs/reference/engine/classes/InputBinding#SecondaryModifier
 	 */
 	readonly secondaryModifier?: Enum.KeyCode;
+	/**
+	 * `GuiButton` that must be actively touched for the binding to fire.
+	 * @see https://create.roblox.com/docs/reference/engine/classes/InputBinding#UIModifier
+	 */
+	readonly uiModifier?: GuiButton;
 }
 
 /** Shared properties for directional (1D/2D/3D) binding configs. */

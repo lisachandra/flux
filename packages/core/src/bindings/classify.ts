@@ -41,6 +41,23 @@ const GAMEPAD_KEYCODES = new Set<Enum.KeyCode>([
 ]);
 
 /**
+ * KeyCodes that report touch gesture data rather than a physical device.
+ *
+ * These are the gesture sources documented on `InputBinding.KeyCode`:
+ * `TouchDelta` reports one-finger swipe velocity in pixels, `TouchPinch`
+ * reports two-finger pinch velocity, and `TouchPosition` reports an active
+ * touch's raw position. They are real, non-deprecated `KeyCode`s, so without
+ * this set they fall through to the keyboard fallback and a touch gesture
+ * binding is filed under the keyboard bucket — which makes conflict detection
+ * compare it against keys it can never collide with.
+ */
+const TOUCH_KEYCODES = new Set<Enum.KeyCode>([
+	Enum.KeyCode.TouchDelta,
+	Enum.KeyCode.TouchPinch,
+	Enum.KeyCode.TouchPosition,
+]);
+
+/**
  * Field names holding a KeyCode, in the order classification consults them:
  * directional keys, then the primary key, then modifiers.
  */
@@ -57,7 +74,7 @@ const KEYCODE_KEYS = [
 ] as const satisfies ReadonlyArray<BindingConfigKey>;
 
 /** Field names that only a touch binding carries. */
-const TOUCH_KEYS = ["pointerIndex", "uiButton"] as const satisfies ReadonlyArray<BindingConfigKey>;
+const TOUCH_KEYS = ["pointerIndex", "uiButton", "uiModifier"] as const satisfies ReadonlyArray<BindingConfigKey>;
 
 /**
  * The `BindingConfig` fields that are neither scanned as an input source nor
@@ -214,8 +231,12 @@ export function filterBindingsByPlatform(
  * @param keyCode - The KeyCode to classify.
  * @returns The platform the KeyCode belongs to.
  */
-function classifyKeyCode(keyCode: Enum.KeyCode): "gamepad" | "keyboard" {
-	return GAMEPAD_KEYCODES.has(keyCode) ? "gamepad" : "keyboard";
+function classifyKeyCode(keyCode: Enum.KeyCode): InputPlatform {
+	if (GAMEPAD_KEYCODES.has(keyCode)) {
+		return "gamepad";
+	}
+
+	return TOUCH_KEYCODES.has(keyCode) ? "touch" : "keyboard";
 }
 
 /**

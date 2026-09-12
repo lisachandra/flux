@@ -19,6 +19,7 @@ const PROPERTY_MAP = {
 	scale: "Scale",
 	secondaryModifier: "SecondaryModifier",
 	uiButton: "UIButton",
+	uiModifier: "UIModifier",
 	up: "Up",
 	vector2Scale: "Vector2Scale",
 	vector3Scale: "Vector3Scale",
@@ -72,7 +73,11 @@ export function createInputBinding(
 		binding.KeyCode = bindingLike;
 	} else {
 		for (const [key, value] of pairs(bindingLike)) {
-			binding[PROPERTY_MAP[key]] = value;
+			// `pairs` widens `value` to the union of every config field, so the
+			// indexed write cannot be checked against one property type even though
+			// PROPERTY_MAP pins each config key to its own InputBinding property.
+			// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the map is what makes the write safe; its per-key property is not expressible on a widened record
+			(binding as unknown as Record<string, unknown>)[PROPERTY_MAP[key]] = value;
 		}
 	}
 
