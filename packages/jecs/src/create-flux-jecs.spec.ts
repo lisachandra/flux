@@ -72,6 +72,22 @@ describe("createFluxJecs", () => {
 		expect(world.has(entity, flux.contexts.ui)).toBeTrue();
 	});
 
+	it("should keep a context tag the entity already carries", () => {
+		expect.assertions(1);
+
+		const world = Jecs.world();
+		const flux = createFluxJecs(world, {
+			actions: TEST_ACTIONS,
+			contexts: TEST_CONTEXTS,
+		});
+
+		const entity = world.entity();
+		world.add(entity, flux.contexts.gameplay);
+		flux.register(entity, new Instance("Folder"), "gameplay");
+
+		expect(world.has(entity, flux.contexts.gameplay)).toBeTrue();
+	});
+
 	it("should use provided actionStateComponent", () => {
 		expect.assertions(1);
 
@@ -390,6 +406,115 @@ describe("createFluxJecs", () => {
 			expect(() => {
 				flux.subscribe(entity, parent, "gameplay");
 			}).toThrow("handle already registered");
+		});
+	});
+
+	describe("binding reads", () => {
+		it("should read context info for the entity", () => {
+			expect.assertions(2);
+
+			const world = Jecs.world();
+			const flux = createFluxJecs(world, { actions: TEST_ACTIONS, contexts: TEST_CONTEXTS });
+			const entity = world.entity();
+			flux.register(entity, new Instance("Folder"), "gameplay");
+
+			expect(flux.getContextInfo(entity, "gameplay").active).toBeTrue();
+			expect(flux.getContextInfo(entity, "ui").priority).toBe(10);
+		});
+
+		it("should read default bindings for the entity", () => {
+			expect.assertions(4);
+
+			const world = Jecs.world();
+			const flux = createFluxJecs(world, { actions: TEST_ACTIONS, contexts: TEST_CONTEXTS });
+			const entity = world.entity();
+			flux.register(entity, new Instance("Folder"), "gameplay");
+
+			expect(flux.getBindings(entity, "jump")).toStrictEqual([Enum.KeyCode.Space]);
+			expect(flux.getBindingsForPlatform(entity, "jump", "keyboard")).toStrictEqual([
+				Enum.KeyCode.Space,
+			]);
+			expect(flux.getAllBindings(entity).move).toStrictEqual([Enum.KeyCode.W]);
+			expect(flux.getBindingOrigin(entity, "jump", "keyboard")).toBe("default");
+		});
+
+		it("should read the neutral value of an action", () => {
+			expect.assertions(2);
+
+			const world = Jecs.world();
+			const flux = createFluxJecs(world, { actions: TEST_ACTIONS, contexts: TEST_CONTEXTS });
+
+			expect(flux.getNeutralValue("jump")).toBeFalse();
+			expect(flux.getNeutralValue("move")).toBe(Vector2.zero);
+		});
+	});
+
+	describe("rebinding", () => {
+		it("should rebind and reset an action for the entity", () => {
+			expect.assertions(3);
+
+			const world = Jecs.world();
+			const flux = createFluxJecs(world, { actions: TEST_ACTIONS, contexts: TEST_CONTEXTS });
+			const entity = world.entity();
+			flux.register(entity, new Instance("Folder"), "gameplay");
+
+			flux.rebind(entity, "jump", [Enum.KeyCode.J]);
+
+			expect(flux.getBindings(entity, "jump")).toStrictEqual([Enum.KeyCode.J]);
+			expect(flux.getBindingOrigin(entity, "jump", "keyboard")).toBe("override");
+
+			flux.resetBindings(entity, "jump");
+
+			expect(flux.getBindings(entity, "jump")).toStrictEqual([Enum.KeyCode.Space]);
+		});
+
+		it("should rebind and reset one platform for the entity", () => {
+			expect.assertions(4);
+
+			const world = Jecs.world();
+			const flux = createFluxJecs(world, { actions: TEST_ACTIONS, contexts: TEST_CONTEXTS });
+			const entity = world.entity();
+			flux.register(entity, new Instance("Folder"), "gameplay");
+
+			flux.rebindForPlatform(entity, "jump", "gamepad", [Enum.KeyCode.ButtonY]);
+
+			expect(flux.getBindingsForPlatform(entity, "jump", "gamepad")).toStrictEqual([
+				Enum.KeyCode.ButtonY,
+			]);
+
+			flux.resetBindingsForPlatform(entity, "jump", "gamepad");
+
+			expect(flux.getBindingOrigin(entity, "jump", "gamepad")).toBe("default");
+
+			flux.rebindForPlatform(entity, "jump", "gamepad", [Enum.KeyCode.ButtonY]);
+			flux.resetAllBindingsForPlatform(entity, "gamepad");
+
+			expect(flux.getBindingOrigin(entity, "jump", "gamepad")).toBe("default");
+			expect(flux.getBindings(entity, "jump")).toStrictEqual([Enum.KeyCode.Space]);
+		});
+
+		it("should round-trip bindings through serialize and load", () => {
+			expect.assertions(3);
+
+			const world = Jecs.world();
+			const flux = createFluxJecs(world, { actions: TEST_ACTIONS, contexts: TEST_CONTEXTS });
+			const source = world.entity();
+			const target = world.entity();
+			flux.register(source, new Instance("Folder"), "gameplay");
+			flux.register(target, new Instance("Folder"), "gameplay");
+
+			flux.rebind(source, "jump", [Enum.KeyCode.J]);
+			flux.loadBindings(target, flux.serializeBindings(source));
+
+			expect(flux.getBindings(target, "jump")).toStrictEqual([Enum.KeyCode.J]);
+
+			flux.resetAllBindings(target);
+
+			expect(flux.getBindings(target, "jump")).toStrictEqual([Enum.KeyCode.Space]);
+
+			flux.rebindAll(target, flux.serializeBindings(source));
+
+			expect(flux.getBindings(target, "jump")).toStrictEqual([Enum.KeyCode.J]);
 		});
 	});
 });

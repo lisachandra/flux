@@ -1,27 +1,35 @@
 ## Package
 
 `@rbxts/flux-react` — thin React wrapper over `@rbxts/flux`. Exports
-`createFluxReact<Actions, Contexts>()` returning
-`{ flush, FluxProvider, useAction, useActiveContext, useBindings, useCapture, useCaptureAction, useFluxCore, useInputContext, useInputPlatform }`.
+`createFluxReact<Actions, Contexts, Source?>()` returning
+`{ flush, FluxProvider, useAction, useActiveContext, useBindings, useCapture, useCaptureAction, useFluxCore, useFluxHandle, useInputContext, useInputPlatform }`.
 Core is injected at render time via
 `<FluxProvider core={core} handle={handle}>`, so the factory can live in a
 shared module that never touches a world or core at import time.
+
+`Source` defaults to `FluxCore`. Any `FluxSource` works: `FluxJecs` makes the
+Provider take an `Entity` and `useFluxCore` return the wrapper, so jecs apps
+never cast to `InputHandle`. Hooks never import jecs; `FluxSourceHandle`
+recovers the handle type from the source.
 
 ## Layout (`src/`)
 
 - `create-flux-react.tsx` — factory assembling the return object.
 - `flux-context.tsx` — internal `FluxContextValue` + `createUseFluxContext`.
 - `flux-provider.tsx` — `FluxProviderProps` + Provider factory.
+- `flux-source.ts` — `FluxSource`, the read surface hooks need from the
+  Provider's source, + `AnyFluxSource` and `FluxSourceHandle`.
 - `update-signal.ts` — subscribe/fire plumbing the wrapper drives.
-- `use-sync-external-store.tsx` — store shim react-lua 17 does not ship.
+- `use-sync-external-store.tsx` — React's store hook when the running react-lua
+  has one, else the ported shim. `selectStoreHook` picks, once, at module load.
 - `batch-sync.ts` — re-entrant `flushSync` the signal and the shim share.
 - `hooks/` — one hook per file: `use-action`, `use-bindings`, `use-capture`
   (exports `useCapture` + `useCaptureAction`), `use-flux-core`,
-  `use-input-context` (exports `useActiveContext` + `useInputContext`),
-  `use-input-platform`. `useInputPlatform` is the odd one out: it reads core's
-  module-level platform signal, so it takes no `FluxContextValue`, is a plain
-  hook rather than a `createUseX` factory, and is exported from the package
-  index as well as hanging off `createFluxReact()`.
+  `use-flux-handle`, `use-input-context` (exports `useActiveContext` +
+  `useInputContext`), `use-input-platform`. `useInputPlatform` is the odd one
+  out: it reads core's module-level platform signal, so it takes no
+  `FluxContextValue`, is a plain hook rather than a `createUseX` factory, and is
+  exported from the package index as well as hanging off `createFluxReact()`.
 
 ## Testing
 
@@ -29,23 +37,23 @@ shared module that never touches a world or core at import time.
 - **Integration** (`src/*.spec.tsx`) — colocated per module: provider lifecycle,
   selector semantics, handle/rerender resync, context/triggers/StrictMode. Real
   `createCore`, no mocks.
+- **jecs seam** (`src/flux-jecs.spec.tsx`, `.spec-d.ts`) — real `FluxJecs` as
+  the Provider source. Only reason react devDepends on `@rbxts/flux-jecs`.
 - **E2E** (`e2e/react/`) — full game with real input devices.
 
 Shared fixtures and probes: `test/fixtures.ts`, `test/probes.tsx`.
 
 ## Constraints
 
-**`useAction` bail-out uses a ref, not `setValue(prev)`.** React-Lua's bail-out
-doesn't reliably skip the first post-change flush when the updater returns
-`previous`. The wrapper compares `lastValueRef.current` and calls `setValue`
-only on real change. Don't "simplify" back to
-`setValue((prev) => prev === x ? prev : x)` — it reintroduces spurious
-rerenders.
-
-**`useAction` resyncs late on handle/selector change.** A Provider `handle` swap
-or new selector identity does not update the rendered value immediately — the
-next `flush()` catches it via the subscribe callback. Locked by the
-`handle and rerender resync` block in `src/hooks/use-action.spec.tsx`.
+**Action snapshots are cached per reader and explicit flush.** `useAction` and
+`useCaptureAction` use the native/shim store hook with a memoized closure owning
+each reader's cache. Changed core, handle, selector, or token dependencies read
+immediately; unchanged dependencies keep changes without a flush cached. Each
+`flush()` advances the publication version, even with no listeners. Fresh-table
+selectors produce a new snapshot each flush; unchanged primitive selections do
+not rerender. Keep caches inside their memoized closures: a shared cell lets an
+abandoned alternate reader invalidate the committed snapshot. Locked by the
+replacement and selector-semantics specs.
 
 **`useCapture`'s `enabled` rides on the request, not the effect alone.** The
 facade decides liveness during render by comparing request identity, so gating
@@ -63,21 +71,54 @@ handed the token never sees `enabled`, so swallowing it would leave a falling
 edge with no verb — the charge-fired-because-a-menu-opened failure. A changed
 action still swallows, because that cancel belongs to a different action.
 
-**`useSyncExternalStore` subscribes once per store, not once per consumer.**
-Don't "simplify" to a `subscribe` call per consumer: each would get its own
-flush, so every flush but the last commits a partial update. Sharing alone is
-not enough either — without the synchronous flush the tearing spec still fails.
-Rationale is on `registerStore`; locked by
-`src/use-sync-external-store.tearing.spec.tsx`, the only spec rendering on a
-concurrent root rather than through RTL's legacy one.
+**Flux requires a concurrent root**, in production and in specs.
+`ReactRoblox.createRoot`, never `createLegacyRoot`. The RTL patch under
+`patches/` buys the same for specs — `createRoot` plus renderer-owned `act`,
+which the root switch does not work without. Locked by
+`src/react-testing-library-root.spec.tsx`, the one spec that fails if either
+hunk is dropped; everything else passes on both root types. Reasoning in
+`docs/adr/0007-native-store-hook-on-a-concurrent-root.md`.
+
+**The shim subscribes once per store, not once per consumer, and the concurrent
+root does not make that redundant.** Don't "simplify" to a `subscribe` call per
+consumer: each would get its own flush, so every flush but the last commits a
+partial update. Rationale is on `registerStore` and in ADR 0007; locked by
+`src/use-sync-external-store.tearing.spec.tsx`, which names the shim rather than
+the selected hook and mounts through `mountConcurrent` because it renders
+outside `act` on purpose.
+
+**Both store-hook paths run in one pass, from one place.** The install is stock,
+so `selectStoreHook` answers with the shim exactly as it does for a consumer. A
+second, patched react-lua is mounted beside it at
+`rbxts_include.native_store_hook` — built at postinstall by
+`scripts/generate-native-store-hook.ts` from the `patches/@rbxts-js__*` files —
+and reached through `#test/native-stack`. `src/native-store-hook.spec.tsx` and
+the `native store hook` block in `src/hooks/use-action.spec.tsx` use it. See
+`docs/adr/0007-native-store-hook-on-a-concurrent-root.md`.
+
+**Native-leg specs build elements with `NativeStack.React.createElement`, not
+JSX,** and render through `NativeStack.ReactRoblox`. A component mixing the two
+stacks throws: `ReactCurrentDispatcher` lives in each stack's own `shared` copy,
+so stock `useState` inside a natively-rendered tree finds no dispatcher.
+
+**Anything mounted twice must be two directories on disk.** roblox-ts maps a
+source path back to a single instance path, so mounting one package directory at
+two places in `test.project.json` makes that specifier ambiguous and specs start
+compiling against whichever mount wins — silently. The generator copies the
+`@rbxts` wrappers for that reason rather than pointing at the store again.
+
+**A store change is only synchronous on the shim path.** React's own hook
+schedules sync-lane work and lets the reconciler drain it once the stack
+unwinds; the shim commits inside its own `batchSync`. Locked by the
+`should defer a store change` case in `src/native-store-hook.spec.tsx`. Not a
+Flux bug — it is React 18's own timing, and neither path shows a torn tree.
 
 **Batch through `batchSync`, never `flushSync` directly.** react-lua drains the
 sync queue in every `flushSync`'s finally block, including one nested inside
-another (`ReactFiberWorkLoop.new.lua:1471`). A second `flushSync` therefore
-commits whatever the listener set scheduled before it, splitting one `flush()`
-in two: shim consumers first at sync lane, `useAction`/`useCaptureAction` after
-at default lane. `batchSync` runs nested calls inline, so one `flush()` stays
-one commit. Locked by `src/flush-batching.spec.tsx`.
+another. A second `flushSync` commits whatever the listener set has already
+scheduled, splitting one publication across commits. `batchSync` runs nested
+calls inline, so the native/shim readers notified by one `flush()` share one
+commit. Locked by the flush-batching specs.
 
 **JSX intrinsics exclude `Name` and `Parent`.** `InstanceAttributes` in
 `@rbxts/react` omits them. Distinguish test probes by `Text` + `queryByText`,
